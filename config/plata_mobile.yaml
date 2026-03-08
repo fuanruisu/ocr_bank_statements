@@ -4,7 +4,7 @@ mode: multiline_after_date_with_secondary_category
 
 defaults:
   cuenta: plata
-  moneda: USD
+  moneda: MXN
 
 patterns:
   date: '(?i)^\d{1,2}\s+de\s+\w+$'
@@ -39,3 +39,4 @@ output_columns:
   - descripcion
   - tarjeta_cuenta
   - tipo
+  - moneda
