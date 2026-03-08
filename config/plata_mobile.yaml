@@ -23,11 +23,9 @@ description_cleanup:
     - '^@\s*'
   normalize_whitespace: true
 
-category_rules:
+detail_rules:
   - match: '(?i)^Viajes'
     value: 'Viajes'
-  - match: '(?i)Compra de acciones'
-    value: 'Inversión'
 
 ocr_fixes:
   suspicious_leading_8_without_dollar: true
@@ -35,6 +33,7 @@ ocr_fixes:
 output_columns:
   - fecha
   - categoria
+  - detalle
   - monto
   - descripcion
   - tarjeta_cuenta

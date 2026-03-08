@@ -91,13 +91,13 @@ def line_contains_any(line, contains_list):
     return False
 
 
-def normalize_category(raw_category, category_rules):
-    if not raw_category:
+def normalize_detail(raw_detail, detail_rules):
+    if not raw_detail:
         return ""
 
-    value = raw_category.strip()
+    value = raw_detail.strip()
 
-    for rule in category_rules:
+    for rule in detail_rules:
         pattern = rule.get("match")
         mapped = rule.get("value", value)
         if pattern and re.search(pattern, value):
@@ -109,7 +109,16 @@ def normalize_category(raw_category, category_rules):
 def finalize_dataframe(rows, cfg):
     output_columns = cfg.get(
         "output_columns",
-        ["fecha", "categoria", "monto", "descripcion", "tarjeta_cuenta", "tipo", "moneda"],
+        [
+            "fecha",
+            "categoria",
+            "detalle",
+            "monto",
+            "descripcion",
+            "tarjeta_cuenta",
+            "tipo",
+            "moneda",
+        ],
     )
 
     df = pd.DataFrame(rows)
@@ -131,7 +140,7 @@ def convert_multiline_after_date_with_secondary_category(lines, cfg):
     cleanup_cfg = cfg.get("description_cleanup", {})
     ignore_lines = cfg.get("ignore_lines", [])
     ignore_contains = cfg.get("ignore_contains", [])
-    category_rules = cfg.get("category_rules", [])
+    detail_rules = cfg.get("detail_rules", [])
 
     if "date" not in patterns:
         raise ValueError("Falta 'patterns.date' en el YAML")
@@ -172,14 +181,15 @@ def convert_multiline_after_date_with_secondary_category(lines, cfg):
             amount_text = secondary_match.group()
             amount, _, currency = parse_amount_to_absolute_type_and_currency(amount_text, cfg)
 
-            category_text = line.replace(amount_text, "").strip()
-            category_text = clean_description(category_text, cleanup_cfg)
-            category_text = normalize_category(category_text, category_rules)
+            detail_text = line.replace(amount_text, "").strip()
+            detail_text = clean_description(detail_text, cleanup_cfg)
+            detail_text = normalize_detail(detail_text, detail_rules)
 
             rows.append(
                 {
                     "fecha": current_date,
-                    "categoria": category_text,
+                    "categoria": "",
+                    "detalle": detail_text,
                     "monto": amount,
                     "descripcion": last_primary_description or "",
                     "tarjeta_cuenta": defaults.get("cuenta", ""),
@@ -203,6 +213,7 @@ def convert_multiline_after_date_with_secondary_category(lines, cfg):
                 {
                     "fecha": current_date,
                     "categoria": "",
+                    "detalle": "",
                     "monto": amount,
                     "descripcion": description,
                     "tarjeta_cuenta": defaults.get("cuenta", ""),
@@ -221,7 +232,7 @@ def convert_multiline_after_date_with_detail_line(lines, cfg):
     cleanup_cfg = cfg.get("description_cleanup", {})
     ignore_lines = cfg.get("ignore_lines", [])
     ignore_contains = cfg.get("ignore_contains", [])
-    category_rules = cfg.get("category_rules", [])
+    detail_rules = cfg.get("detail_rules", [])
 
     if "date" not in patterns:
         raise ValueError("Falta 'patterns.date' en el YAML")
@@ -273,6 +284,7 @@ def convert_multiline_after_date_with_detail_line(lines, cfg):
             pending_row = {
                 "fecha": current_date,
                 "categoria": "",
+                "detalle": "",
                 "monto": amount,
                 "descripcion": description,
                 "tarjeta_cuenta": defaults.get("cuenta", ""),
@@ -281,11 +293,10 @@ def convert_multiline_after_date_with_detail_line(lines, cfg):
             }
             continue
 
-        # línea de detalle asociada al movimiento previo
         if pending_row is not None:
-            category_text = clean_description(line, cleanup_cfg)
-            category_text = normalize_category(category_text, category_rules)
-            pending_row["categoria"] = category_text
+            detail_text = clean_description(line, cleanup_cfg)
+            detail_text = normalize_detail(detail_text, detail_rules)
+            pending_row["detalle"] = detail_text
             rows.append(pending_row)
             pending_row = None
             continue

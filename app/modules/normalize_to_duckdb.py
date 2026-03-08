@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 from pathlib import Path
 import argparse
 import hashlib
@@ -43,14 +41,17 @@ def parse_spanish_date(value: str, year: int) -> str:
 
 
 def make_hash_id(row: pd.Series) -> str:
-    raw = "|".join([
-        str(row.get("fecha", "")),
-        str(row.get("descripcion", "")).strip().lower(),
-        str(row.get("monto", "")),
-        str(row.get("tarjeta_cuenta", "")).strip().lower(),
-        str(row.get("tipo", "")).strip().lower(),
-        str(row.get("moneda", "")).strip().upper(),
-    ])
+    raw = "|".join(
+        [
+            str(row.get("fecha", "")),
+            str(row.get("descripcion", "")).strip().lower(),
+            str(row.get("detalle", "")).strip().lower(),
+            str(row.get("monto", "")),
+            str(row.get("tarjeta_cuenta", "")).strip().lower(),
+            str(row.get("tipo", "")).strip().lower(),
+            str(row.get("moneda", "")).strip().upper(),
+        ]
+    )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
@@ -60,6 +61,7 @@ def normalize_csv(input_csv: Path, bank: str, default_currency: str, year: int) 
     required_cols = {
         "fecha",
         "categoria",
+        "detalle",
         "monto",
         "descripcion",
         "tarjeta_cuenta",
@@ -73,7 +75,8 @@ def normalize_csv(input_csv: Path, bank: str, default_currency: str, year: int) 
     out = df.copy()
 
     out["fecha"] = out["fecha"].astype(str).map(lambda x: parse_spanish_date(x, year))
-    out["categoria"] = out["categoria"].fillna("").astype(str).str.strip()
+    out["categoria"] = out["categoria"].fillna("").astype(str).str.strip().str.lower()
+    out["detalle"] = out["detalle"].fillna("").astype(str).str.strip()
     out["descripcion"] = out["descripcion"].fillna("").astype(str).str.strip()
     out["tarjeta_cuenta"] = out["tarjeta_cuenta"].fillna("").astype(str).str.strip()
     out["tipo"] = out["tipo"].fillna("").astype(str).str.strip().str.lower()
@@ -95,6 +98,7 @@ def normalize_csv(input_csv: Path, bank: str, default_currency: str, year: int) 
         [
             "fecha",
             "categoria",
+            "detalle",
             "monto",
             "descripcion",
             "tarjeta_cuenta",
@@ -115,6 +119,7 @@ def ensure_table(con):
         CREATE TABLE IF NOT EXISTS movimientos (
             fecha DATE,
             categoria TEXT,
+            detalle TEXT,
             monto DOUBLE,
             descripcion TEXT,
             tarjeta_cuenta TEXT,
@@ -129,6 +134,7 @@ def ensure_table(con):
 
     con.execute("CREATE INDEX IF NOT EXISTS idx_fecha ON movimientos(fecha)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_categoria ON movimientos(categoria)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_detalle ON movimientos(detalle)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_tipo ON movimientos(tipo)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_banco ON movimientos(banco)")
 
@@ -151,15 +157,9 @@ def upsert_movimientos(con, df: pd.DataFrame):
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Normaliza CSV staging y lo carga a DuckDB"
-    )
+    parser = argparse.ArgumentParser(description="Normaliza CSV staging y lo carga a DuckDB")
     parser.add_argument("--input", required=True, help="CSV staging de entrada")
-    parser.add_argument(
-        "--db",
-        default="data/duckdb/finanzas.duckdb",
-        help="Ruta del archivo DuckDB",
-    )
+    parser.add_argument("--db", default="data/duckdb/finanzas.duckdb", help="Ruta del archivo DuckDB")
     parser.add_argument("--bank", required=True, help="Nombre del banco, ej. plata")
     parser.add_argument("--default-currency", default="MXN", help="Moneda default")
     parser.add_argument("--year", type=int, required=True, help="Año para las fechas")
