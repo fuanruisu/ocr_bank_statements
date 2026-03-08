@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "banketl"
+version = "0.1.0"
+description = "OCR + ETL de estados de cuenta hacia DuckDB"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pillow",
+    "pytesseract",
+    "pdf2image",
+    "pandas",
+    "duckdb",
+    "pyyaml"
+]
+
+[project.scripts]
+banketl = "app.main:main"
