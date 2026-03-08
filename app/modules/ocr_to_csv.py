@@ -36,9 +36,10 @@ def parse_amount_to_absolute_type_and_currency(amount_text, cfg=None):
     raw = amount_text.strip()
 
     sign = "ingreso"
-    if raw.startswith("-") or raw.startswith("–"):
+
+    if "-" in raw or "–" in raw:
         sign = "gasto"
-    elif raw.startswith("+"):
+    elif "+" in raw:
         sign = "ingreso"
 
     currency = (cfg or {}).get("defaults", {}).get("currency", "MXN")
@@ -103,6 +104,25 @@ def normalize_category(raw_category, category_rules):
             return mapped
 
     return value
+
+
+def finalize_dataframe(rows, cfg):
+    output_columns = cfg.get(
+        "output_columns",
+        ["fecha", "categoria", "monto", "descripcion", "tarjeta_cuenta", "tipo", "moneda"],
+    )
+
+    df = pd.DataFrame(rows)
+
+    if df.empty:
+        return pd.DataFrame(columns=output_columns)
+
+    for col in output_columns:
+        if col not in df.columns:
+            df[col] = ""
+
+    df = df[output_columns]
+    return df
 
 
 def convert_multiline_after_date_with_secondary_category(lines, cfg):
@@ -192,24 +212,88 @@ def convert_multiline_after_date_with_secondary_category(lines, cfg):
             )
             continue
 
-    df = pd.DataFrame(rows)
+    return finalize_dataframe(rows, cfg)
 
-    output_columns = cfg.get(
-        "output_columns",
-        ["fecha", "categoria", "monto", "descripcion", "tarjeta_cuenta", "tipo", "moneda"],
-    )
 
-    if df.empty:
-        df = pd.DataFrame(columns=output_columns)
-        return df
+def convert_multiline_after_date_with_detail_line(lines, cfg):
+    patterns = cfg.get("patterns", {})
+    defaults = cfg.get("defaults", {})
+    cleanup_cfg = cfg.get("description_cleanup", {})
+    ignore_lines = cfg.get("ignore_lines", [])
+    ignore_contains = cfg.get("ignore_contains", [])
+    category_rules = cfg.get("category_rules", [])
 
-    for col in output_columns:
-        if col not in df.columns:
-            df[col] = ""
+    if "date" not in patterns:
+        raise ValueError("Falta 'patterns.date' en el YAML")
+    if "primary_amount" not in patterns:
+        raise ValueError("Falta 'patterns.primary_amount' en el YAML")
 
-    df = df[output_columns]
+    date_re = re.compile(patterns["date"])
+    primary_amount_re = re.compile(patterns["primary_amount"])
 
-    return df
+    current_date = None
+    pending_row = None
+    rows = []
+
+    for original_line in lines:
+        line = original_line.strip()
+
+        if not line:
+            continue
+
+        if line_contains_any(line, ignore_contains):
+            continue
+
+        if line_matches_any_regex(line, ignore_lines):
+            continue
+
+        if date_re.search(line):
+            if pending_row is not None:
+                rows.append(pending_row)
+                pending_row = None
+
+            current_date = line
+            continue
+
+        if current_date is None:
+            continue
+
+        primary_match = primary_amount_re.search(line)
+        if primary_match:
+            if pending_row is not None:
+                rows.append(pending_row)
+                pending_row = None
+
+            amount_text = primary_match.group()
+            amount, tx_type, currency = parse_amount_to_absolute_type_and_currency(amount_text, cfg)
+
+            description = line.replace(amount_text, "").strip()
+            description = clean_description(description, cleanup_cfg)
+
+            pending_row = {
+                "fecha": current_date,
+                "categoria": "",
+                "monto": amount,
+                "descripcion": description,
+                "tarjeta_cuenta": defaults.get("cuenta", ""),
+                "tipo": tx_type,
+                "moneda": currency,
+            }
+            continue
+
+        # línea de detalle asociada al movimiento previo
+        if pending_row is not None:
+            category_text = clean_description(line, cleanup_cfg)
+            category_text = normalize_category(category_text, category_rules)
+            pending_row["categoria"] = category_text
+            rows.append(pending_row)
+            pending_row = None
+            continue
+
+    if pending_row is not None:
+        rows.append(pending_row)
+
+    return finalize_dataframe(rows, cfg)
 
 
 def convert_to_csv(txt_path, out_dir, config=None):
@@ -228,6 +312,8 @@ def convert_to_csv(txt_path, out_dir, config=None):
 
     if mode == "multiline_after_date_with_secondary_category":
         df = convert_multiline_after_date_with_secondary_category(lines, cfg)
+    elif mode == "multiline_after_date_with_detail_line":
+        df = convert_multiline_after_date_with_detail_line(lines, cfg)
     else:
         raise ValueError(f"Modo no soportado todavía: {mode}")
 

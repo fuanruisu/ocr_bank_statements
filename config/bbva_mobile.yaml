@@ -1,0 +1,30 @@
+name: bbva_mobile
+input_type: image_mobile
+mode: multiline_after_date_with_detail_line
+
+defaults:
+  cuenta: bbva
+  moneda: MXN
+
+patterns:
+  date: '(?i)^\d{1,2}\s+de\s+\w+$'
+  primary_amount: '\$\s*[-+]?\d[\d,]*\.\d{2}'
+
+ignore_contains:
+  - '=== PAGE'
+
+ignore_lines: []
+
+description_cleanup:
+  normalize_whitespace: true
+
+category_rules: []
+
+output_columns:
+  - fecha
+  - categoria
+  - monto
+  - descripcion
+  - tarjeta_cuenta
+  - tipo
+  - moneda
