@@ -1,0 +1,4 @@
+pillow
+pytesseract
+pdf2image
+pandas
