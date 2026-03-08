@@ -4,3 +4,4 @@ __pycache__/
 *.pyc
 data/raw_text/
 data/staging_csv/
+data/inputs
