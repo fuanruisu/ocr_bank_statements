@@ -2,3 +2,5 @@ pillow
 pytesseract
 pdf2image
 pandas
+duckdb
+pyyaml
