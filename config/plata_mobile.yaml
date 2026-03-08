@@ -29,31 +29,8 @@ category_rules:
   - match: '(?i)Compra de acciones'
     value: 'Inversión'
 
-movement_rules:
-  primary:
-    target_fields:
-      descripcion: from_line_without_amount
-      monto: absolute_from_amount
-      tipo: from_sign
-      categoria: empty
-
-  secondary:
-    target_fields:
-      descripcion: inherit_previous_description
-      monto: absolute_from_amount
-      tipo: ingreso
-      categoria: from_line_without_amount
-
-postprocess:
-  normalize_category:
-    - pattern: '(?i)^Viajes.*$'
-      value: 'Viajes'
-
-  amount_fixes:
-    strip_currency_words: true
-    strip_dollar_sign: true
-    strip_commas: true
-    keep_absolute_value: true
+ocr_fixes:
+  suspicious_leading_8_without_dollar: true
 
 output_columns:
   - fecha
