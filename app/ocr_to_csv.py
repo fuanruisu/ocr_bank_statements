@@ -32,7 +32,7 @@ def clean_description(text, cleanup_cfg):
     return value.strip()
 
 
-def parse_amount_to_absolute_and_type(amount_text):
+def parse_amount_to_absolute_and_type(amount_text, cfg=None):
     raw = amount_text.strip()
 
     sign = "ingreso"
@@ -40,6 +40,9 @@ def parse_amount_to_absolute_and_type(amount_text):
         sign = "gasto"
     elif raw.startswith("+"):
         sign = "ingreso"
+
+    has_dollar = "$" in raw
+    has_usd = "USD" in raw.upper()
 
     numeric = raw
     numeric = numeric.replace("USD", "")
@@ -50,9 +53,21 @@ def parse_amount_to_absolute_and_type(amount_text):
     numeric = numeric.replace("-", "")
     numeric = numeric.strip()
 
-    # Fix común OCR: "-8261.11" cuando realmente era "-$261.11"
-    # De momento NO lo corregimos automáticamente porque puede romper datos.
-    # Solo convertimos a float si es parseable.
+    ocr_fixes = (cfg or {}).get("ocr_fixes", {})
+
+    # Fix OCR específico para algunos casos tipo:
+    # -8261.11  -> realmente era -$261.11
+    if (
+        ocr_fixes.get("suspicious_leading_8_without_dollar", False)
+        and sign == "gasto"
+        and not has_dollar
+        and not has_usd
+        and numeric.startswith("8")
+        and "." in numeric
+        and len(numeric) >= 5
+    ):
+        numeric = numeric[1:]
+
     amount = float(numeric)
 
     return amount, sign
@@ -95,6 +110,13 @@ def convert_multiline_after_date_with_secondary_category(lines, cfg):
     ignore_contains = cfg.get("ignore_contains", [])
     category_rules = cfg.get("category_rules", [])
 
+    if "date" not in patterns:
+        raise ValueError("Falta 'patterns.date' en el YAML")
+    if "primary_amount" not in patterns:
+        raise ValueError("Falta 'patterns.primary_amount' en el YAML")
+    if "secondary_amount" not in patterns:
+        raise ValueError("Falta 'patterns.secondary_amount' en el YAML")
+
     date_re = re.compile(patterns["date"])
     primary_amount_re = re.compile(patterns["primary_amount"])
     secondary_amount_re = re.compile(patterns["secondary_amount"])
@@ -122,11 +144,11 @@ def convert_multiline_after_date_with_secondary_category(lines, cfg):
         if current_date is None:
             continue
 
-        # 1) Línea secundaria: categoría + ingreso asociado
+        # Línea secundaria: categoría + ingreso asociado
         secondary_match = secondary_amount_re.search(line)
         if secondary_match:
             amount_text = secondary_match.group()
-            amount, tx_type = parse_amount_to_absolute_and_type(amount_text)
+            amount, _ = parse_amount_to_absolute_and_type(amount_text, cfg)
 
             category_text = line.replace(amount_text, "").strip()
             category_text = clean_description(category_text, cleanup_cfg)
@@ -144,11 +166,11 @@ def convert_multiline_after_date_with_secondary_category(lines, cfg):
             )
             continue
 
-        # 2) Línea principal: comercio + monto
+        # Línea principal: comercio + monto
         primary_match = primary_amount_re.search(line)
         if primary_match:
             amount_text = primary_match.group()
-            amount, tx_type = parse_amount_to_absolute_and_type(amount_text)
+            amount, tx_type = parse_amount_to_absolute_and_type(amount_text, cfg)
 
             description = line.replace(amount_text, "").strip()
             description = clean_description(description, cleanup_cfg)
@@ -173,6 +195,10 @@ def convert_multiline_after_date_with_secondary_category(lines, cfg):
         "output_columns",
         ["fecha", "categoria", "monto", "descripcion", "tarjeta_cuenta", "tipo"],
     )
+
+    if df.empty:
+        df = pd.DataFrame(columns=output_columns)
+        return df
 
     for col in output_columns:
         if col not in df.columns:
