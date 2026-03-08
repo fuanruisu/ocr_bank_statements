@@ -1,55 +1,208 @@
 from pathlib import Path
-import pandas as pd
 import re
+import pandas as pd
+import yaml
 
 
-def convert_to_csv(txt_path, out_dir, config=None):
+def load_yaml_config(config_path):
+    if not config_path:
+        return None
 
-    out_dir = Path(out_dir)
+    config_file = Path(config_path)
 
-    out_dir.mkdir(parents=True, exist_ok=True)
+    if not config_file.exists():
+        raise FileNotFoundError(f"No existe el config YAML: {config_file}")
 
-    text = Path(txt_path).read_text(encoding="utf-8")
+    with config_file.open("r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
 
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
 
-    rows = []
+def clean_description(text, cleanup_cfg):
+    value = text
+
+    if not cleanup_cfg:
+        return value.strip()
+
+    for pattern in cleanup_cfg.get("remove_prefixes", []):
+        value = re.sub(pattern, "", value)
+
+    if cleanup_cfg.get("normalize_whitespace", False):
+        value = re.sub(r"\s+", " ", value)
+
+    return value.strip()
+
+
+def parse_amount_to_absolute_and_type(amount_text):
+    raw = amount_text.strip()
+
+    sign = "ingreso"
+    if raw.startswith("-") or raw.startswith("–"):
+        sign = "gasto"
+    elif raw.startswith("+"):
+        sign = "ingreso"
+
+    numeric = raw
+    numeric = numeric.replace("USD", "")
+    numeric = numeric.replace("$", "")
+    numeric = numeric.replace(",", "")
+    numeric = numeric.replace("–", "-")
+    numeric = numeric.replace("+", "")
+    numeric = numeric.replace("-", "")
+    numeric = numeric.strip()
+
+    # Fix común OCR: "-8261.11" cuando realmente era "-$261.11"
+    # De momento NO lo corregimos automáticamente porque puede romper datos.
+    # Solo convertimos a float si es parseable.
+    amount = float(numeric)
+
+    return amount, sign
+
+
+def line_matches_any_regex(line, regex_list):
+    for pattern in regex_list:
+        if re.search(pattern, line):
+            return True
+    return False
+
+
+def line_contains_any(line, contains_list):
+    for token in contains_list:
+        if token in line:
+            return True
+    return False
+
+
+def normalize_category(raw_category, category_rules):
+    if not raw_category:
+        return ""
+
+    value = raw_category.strip()
+
+    for rule in category_rules:
+        pattern = rule.get("match")
+        mapped = rule.get("value", value)
+        if pattern and re.search(pattern, value):
+            return mapped
+
+    return value
+
+
+def convert_multiline_after_date_with_secondary_category(lines, cfg):
+    patterns = cfg.get("patterns", {})
+    defaults = cfg.get("defaults", {})
+    cleanup_cfg = cfg.get("description_cleanup", {})
+    ignore_lines = cfg.get("ignore_lines", [])
+    ignore_contains = cfg.get("ignore_contains", [])
+    category_rules = cfg.get("category_rules", [])
+
+    date_re = re.compile(patterns["date"])
+    primary_amount_re = re.compile(patterns["primary_amount"])
+    secondary_amount_re = re.compile(patterns["secondary_amount"])
 
     current_date = None
+    last_primary_description = None
+    rows = []
 
-    date_regex = re.compile(r"\d{1,2}\s+de\s+\w+", re.IGNORECASE)
-    amount_regex = re.compile(r"[-+]?\$[\d,]+\.\d{2}")
+    for original_line in lines:
+        line = original_line.strip()
 
-    for line in lines:
-
-        if line.startswith("=== PAGE"):
+        if not line:
             continue
 
-        if date_regex.search(line):
+        if line_contains_any(line, ignore_contains):
+            continue
+
+        if line_matches_any_regex(line, ignore_lines):
+            continue
+
+        if date_re.search(line):
             current_date = line
             continue
 
-        amount_match = amount_regex.search(line)
+        if current_date is None:
+            continue
 
-        if amount_match and current_date:
+        # 1) Línea secundaria: categoría + ingreso asociado
+        secondary_match = secondary_amount_re.search(line)
+        if secondary_match:
+            amount_text = secondary_match.group()
+            amount, tx_type = parse_amount_to_absolute_and_type(amount_text)
 
-            amount = amount_match.group()
-
-            description = line.replace(amount, "").strip()
+            category_text = line.replace(amount_text, "").strip()
+            category_text = clean_description(category_text, cleanup_cfg)
+            category_text = normalize_category(category_text, category_rules)
 
             rows.append(
                 {
-                    "fecha_raw": current_date,
-                    "descripcion_raw": description,
-                    "monto_raw": amount,
-                    "linea_raw": line,
+                    "fecha": current_date,
+                    "categoria": category_text,
+                    "monto": amount,
+                    "descripcion": last_primary_description or "",
+                    "tarjeta_cuenta": defaults.get("cuenta", ""),
+                    "tipo": "ingreso",
                 }
             )
+            continue
+
+        # 2) Línea principal: comercio + monto
+        primary_match = primary_amount_re.search(line)
+        if primary_match:
+            amount_text = primary_match.group()
+            amount, tx_type = parse_amount_to_absolute_and_type(amount_text)
+
+            description = line.replace(amount_text, "").strip()
+            description = clean_description(description, cleanup_cfg)
+
+            last_primary_description = description
+
+            rows.append(
+                {
+                    "fecha": current_date,
+                    "categoria": "",
+                    "monto": amount,
+                    "descripcion": description,
+                    "tarjeta_cuenta": defaults.get("cuenta", ""),
+                    "tipo": tx_type,
+                }
+            )
+            continue
 
     df = pd.DataFrame(rows)
 
-    out_file = out_dir / f"{Path(txt_path).stem}.csv"
+    output_columns = cfg.get(
+        "output_columns",
+        ["fecha", "categoria", "monto", "descripcion", "tarjeta_cuenta", "tipo"],
+    )
 
+    for col in output_columns:
+        if col not in df.columns:
+            df[col] = ""
+
+    df = df[output_columns]
+
+    return df
+
+
+def convert_to_csv(txt_path, out_dir, config=None):
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    text = Path(txt_path).read_text(encoding="utf-8")
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+
+    cfg = load_yaml_config(config)
+
+    if not cfg:
+        raise ValueError("Se requiere --config para esta versión del parser.")
+
+    mode = cfg.get("mode")
+
+    if mode == "multiline_after_date_with_secondary_category":
+        df = convert_multiline_after_date_with_secondary_category(lines, cfg)
+    else:
+        raise ValueError(f"Modo no soportado todavía: {mode}")
+
+    out_file = out_dir / f"{Path(txt_path).stem}.csv"
     df.to_csv(out_file, index=False)
 
     return out_file
