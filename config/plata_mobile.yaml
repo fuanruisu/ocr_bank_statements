@@ -1,0 +1,64 @@
+name: plata_mobile
+input_type: image_mobile
+mode: multiline_after_date_with_secondary_category
+
+defaults:
+  cuenta: plata
+  moneda: USD
+
+patterns:
+  date: '(?i)^\d{1,2}\s+de\s+\w+$'
+  primary_amount: '[-–]?\$?\d[\d,]*\.\d{2}|[-–]?USD\s*\d[\d,]*\.\d{2}|[-–]?\d[\d,]*\.\d{2}'
+  secondary_amount: '[+]\$?\d[\d,]*\.\d{2}'
+
+ignore_lines:
+  - '^Compra de acciones$'
+
+ignore_contains:
+  - '=== PAGE'
+
+description_cleanup:
+  remove_prefixes:
+    - '^\([A-Za-z]\)\s*'
+    - '^@\s*'
+  normalize_whitespace: true
+
+category_rules:
+  - match: '(?i)^Viajes'
+    value: 'Viajes'
+  - match: '(?i)Compra de acciones'
+    value: 'Inversión'
+
+movement_rules:
+  primary:
+    target_fields:
+      descripcion: from_line_without_amount
+      monto: absolute_from_amount
+      tipo: from_sign
+      categoria: empty
+
+  secondary:
+    target_fields:
+      descripcion: inherit_previous_description
+      monto: absolute_from_amount
+      tipo: ingreso
+      categoria: from_line_without_amount
+
+postprocess:
+  normalize_category:
+    - pattern: '(?i)^Viajes.*$'
+      value: 'Viajes'
+
+  amount_fixes:
+    strip_currency_words: true
+    strip_dollar_sign: true
+    strip_commas: true
+    keep_absolute_value: true
+
+output_columns:
+  - fecha
+  - categoria
+  - monto
+  - descripcion
+  - tarjeta_cuenta
+  - tipo
