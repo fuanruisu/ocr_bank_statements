@@ -1,8 +1,28 @@
-.venv/
-venv/
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+
+# virtual environments
+.venv/
+venv/
+
+# build
+build/
+dist/
+
+# data pipeline outputs
 data/raw_text/
 data/staging_csv/
-data/inputs
 data/duckdb/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# editor
+.vscode/
+.idea/
