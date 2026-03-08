@@ -5,3 +5,4 @@ __pycache__/
 data/raw_text/
 data/staging_csv/
 data/inputs
+data/duckdb/
