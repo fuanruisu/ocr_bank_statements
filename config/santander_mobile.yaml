@@ -1,0 +1,35 @@
+name: santander_mobile
+input_type: image_mobile
+mode: positional_triplets
+
+sign_convention: inverted
+
+defaults:
+  cuenta: santander
+  moneda: MXN
+
+patterns:
+  date: '(?i)^\w+\s+\d{1,2}\s+de\s+\w+,\s+\d{4}$'
+  amount: '[-+]?\d[\d,]*\.\d{2}'
+
+ignore_contains:
+  - 'Digital o Adicional'
+  - 'Descargar estado de cuenta'
+  - 'Movimientos'
+
+ignore_regex:
+  - '(?i)digital\s+o\s+adicional'
+  - '\*{2,}\d{2,}'
+
+description_cleanup:
+  normalize_whitespace: true
+
+output_columns:
+  - fecha
+  - categoria
+  - detalle
+  - monto
+  - descripcion
+  - tarjeta_cuenta
+  - tipo
+  - moneda
