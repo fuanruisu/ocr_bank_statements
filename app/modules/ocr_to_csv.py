@@ -58,6 +58,9 @@ def parse_amount_to_absolute_type_and_currency(amount_text, cfg=None):
     has_dollar = "$" in raw
     has_usd = "USD" in raw.upper()
 
+    raw = raw.replace(":", ".")   # OCR confunde . con :
+    raw = raw.replace(",", "")    # quitar separador de miles
+
     numeric = re.search(r"\d+\.\d+", raw)
     if not numeric:
         raise ValueError(f"No se pudo extraer monto de: {raw}")
@@ -385,6 +388,162 @@ def convert_positional_triplets(lines, cfg):
     return finalize_dataframe(rows, cfg)
 
 
+
+@register_parser("openbank_block")
+def convert_openbank_block(lines, cfg):
+
+    patterns = cfg["patterns"]
+    defaults = cfg["defaults"]
+
+    amount_re = re.compile(patterns["amount"])
+    date_re = re.compile(patterns["date"], re.I)
+
+    ignore_contains = cfg.get("ignore_contains", [])
+
+    rows = []
+
+    current_desc = None
+    current_amount = None
+    detail_lines = []
+
+    for line in lines:
+
+        if line_contains_any(line, ignore_contains):
+            continue
+
+        amount_match = amount_re.search(line)
+
+        # Línea que contiene descripción + monto
+        if amount_match:
+
+            amount_text = amount_match.group()
+
+            amount, tx_type, currency = parse_amount_to_absolute_type_and_currency(
+                amount_text, cfg
+            )
+
+            desc = line.replace(amount_text, "")
+            desc = desc.replace("<", "")
+            desc = desc.strip()
+
+            current_desc = desc
+            current_amount = amount
+            detail_lines = []
+
+            continue
+
+        # Fecha → cerrar transacción
+        if date_re.search(line):
+
+            if current_amount is None:
+                continue
+
+            # Construir detalle completo
+            detalle_parts = [current_desc] + detail_lines
+            detalle = " ".join(detalle_parts)
+
+            # cortar después de "Liquidado"
+            detalle = re.split(r"\bLiquidado\b", detalle, flags=re.I)[0]
+
+            # limpieza OCR
+            detalle = detalle.replace(",", " ")
+            detalle = detalle.replace("-", " ")
+            detalle = re.sub(r"\s+", " ", detalle).strip()
+
+            rows.append(
+                {
+                    "fecha": line,
+                    "categoria": "",
+                    "detalle": detalle,
+                    "monto": current_amount,
+                    "descripcion": current_desc,
+                    "tarjeta_cuenta": defaults.get("cuenta", ""),
+                    "tipo": "gasto",
+                    "moneda": defaults.get("currency", "MXN"),
+                }
+            )
+
+            current_desc = None
+            current_amount = None
+            detail_lines = []
+
+            continue
+
+        # líneas intermedias → parte del detalle
+        if current_amount is not None:
+            detail_lines.append(line)
+
+    return finalize_dataframe(rows, cfg)
+
+
+@register_parser("mercadopago_mobile")
+def convert_mercadopago_mobile(lines, cfg):
+
+    patterns = cfg["patterns"]
+    defaults = cfg["defaults"]
+
+    date_re = re.compile(patterns["date"], re.I)
+    amount_re = re.compile(patterns["amount"])
+
+    ignore_contains = cfg.get("ignore_contains", [])
+
+    fechas = []
+    descs = []
+    montos = []
+
+    current_fecha = None
+
+    for line in lines:
+
+        if line_contains_any(line, ignore_contains):
+            continue
+
+        # detectar fecha
+        if date_re.search(line):
+            current_fecha = line
+            continue
+
+        # detectar descripcion
+        if line.strip() == "Mercado Libre":
+            descs.append((current_fecha, "Mercado Libre"))
+            continue
+
+        # detectar monto
+        if amount_re.search(line):
+
+            amount_text = amount_re.search(line).group()
+
+            amount, _, currency = parse_amount_to_absolute_type_and_currency(
+                amount_text, cfg
+            )
+            tx_type = "gasto"
+
+            montos.append((amount, tx_type, currency))
+            continue
+
+    n = min(len(descs), len(montos))
+
+    rows = []
+
+    for i in range(n):
+
+        fecha, detalle = descs[i]
+        monto, tx_type, currency = montos[i]
+
+        rows.append(
+            {
+                "fecha": fecha,
+                "categoria": "",
+                "detalle": detalle,
+                "monto": monto,
+                "descripcion": "Compra",
+                "tarjeta_cuenta": defaults.get("cuenta", ""),
+                "tipo": tx_type,
+                "moneda": currency,
+            }
+        )
+
+    return finalize_dataframe(rows, cfg)
 # -------------------------------------------------------------
 
 
