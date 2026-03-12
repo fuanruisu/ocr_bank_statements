@@ -50,14 +50,11 @@ def parse_amount_to_absolute_type_and_currency(amount_text, cfg=None):
     has_dollar = "$" in raw
     has_usd = "USD" in raw.upper()
 
-    numeric = raw
-    numeric = numeric.replace("USD", "")
-    numeric = numeric.replace("$", "")
-    numeric = numeric.replace(",", "")
-    numeric = numeric.replace("–", "-")
-    numeric = numeric.replace("+", "")
-    numeric = numeric.replace("-", "")
-    numeric = numeric.strip()
+    numeric = re.search(r"\d+\.\d+", raw)
+    if not numeric:
+        raise ValueError(f"No se pudo extraer monto de: {raw}")
+
+    numeric = numeric.group()
 
     ocr_fixes = (cfg or {}).get("ocr_fixes", {})
 
@@ -271,6 +268,7 @@ def convert_multiline_after_date_with_detail_line(lines, cfg):
 
         primary_match = primary_amount_re.search(line)
         if primary_match:
+
             if pending_row is not None:
                 rows.append(pending_row)
                 pending_row = None
@@ -291,6 +289,7 @@ def convert_multiline_after_date_with_detail_line(lines, cfg):
                 "tipo": tx_type,
                 "moneda": currency,
             }
+
             continue
 
         if pending_row is not None:
@@ -305,6 +304,77 @@ def convert_multiline_after_date_with_detail_line(lines, cfg):
         rows.append(pending_row)
 
     return finalize_dataframe(rows, cfg)
+
+
+# ---------------- NUEVO PARSER PARA SANTANDER ----------------
+
+def convert_positional_triplets(lines, cfg):
+
+    patterns = cfg.get("patterns", {})
+    defaults = cfg.get("defaults", {})
+
+    date_re = re.compile(patterns["date"])
+    amount_re = re.compile(patterns["amount"])
+
+    ignore_contains = cfg.get("ignore_contains", [])
+    ignore_regex = cfg.get("ignore_regex", [])
+
+    fechas = []
+    descs = []
+    montos = []
+
+    for line in lines:
+
+        if line_contains_any(line, ignore_contains):
+            continue
+
+        if line_matches_any_regex(line, ignore_regex):
+            continue
+
+        if date_re.search(line):
+            fechas.append(line)
+            continue
+
+        if amount_re.search(line):
+            montos.append(line)
+            continue
+
+        descs.append(line)
+
+    n = min(len(fechas), len(descs), len(montos))
+
+    rows = []
+
+    sign_conv = cfg.get("sign_convention", "normal")
+
+    for i in range(n):
+
+        amount_text = montos[i]
+
+        amount, tx_type, currency = parse_amount_to_absolute_type_and_currency(
+            amount_text, cfg
+        )
+
+        if sign_conv == "inverted":
+            tx_type = "ingreso" if tx_type == "gasto" else "gasto"
+
+        rows.append(
+            {
+                "fecha": fechas[i],
+                "categoria": "",
+                "detalle": "",
+                "monto": amount,
+                "descripcion": descs[i],
+                "tarjeta_cuenta": defaults.get("cuenta", ""),
+                "tipo": tx_type,
+                "moneda": currency,
+            }
+        )
+
+    return finalize_dataframe(rows, cfg)
+
+
+# -------------------------------------------------------------
 
 
 def convert_to_csv(txt_path, out_dir, config=None):
@@ -323,8 +393,13 @@ def convert_to_csv(txt_path, out_dir, config=None):
 
     if mode == "multiline_after_date_with_secondary_category":
         df = convert_multiline_after_date_with_secondary_category(lines, cfg)
+
     elif mode == "multiline_after_date_with_detail_line":
         df = convert_multiline_after_date_with_detail_line(lines, cfg)
+
+    elif mode == "positional_triplets":
+        df = convert_positional_triplets(lines, cfg)
+
     else:
         raise ValueError(f"Modo no soportado todavía: {mode}")
 
