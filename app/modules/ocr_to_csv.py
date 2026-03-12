@@ -3,6 +3,14 @@ import re
 import pandas as pd
 import yaml
 
+PARSER_REGISTRY = {}
+
+def register_parser(name):
+    def decorator(func):
+        PARSER_REGISTRY[name] = func
+        return func
+    return decorator
+
 
 def load_yaml_config(config_path):
     if not config_path:
@@ -131,6 +139,7 @@ def finalize_dataframe(rows, cfg):
     return df
 
 
+@register_parser("multiline_after_date_with_secondary_category")
 def convert_multiline_after_date_with_secondary_category(lines, cfg):
     patterns = cfg.get("patterns", {})
     defaults = cfg.get("defaults", {})
@@ -223,6 +232,7 @@ def convert_multiline_after_date_with_secondary_category(lines, cfg):
     return finalize_dataframe(rows, cfg)
 
 
+@register_parser("multiline_after_date_with_detail_line")
 def convert_multiline_after_date_with_detail_line(lines, cfg):
     patterns = cfg.get("patterns", {})
     defaults = cfg.get("defaults", {})
@@ -308,6 +318,7 @@ def convert_multiline_after_date_with_detail_line(lines, cfg):
 
 # ---------------- NUEVO PARSER PARA SANTANDER ----------------
 
+@register_parser("positional_triplets")
 def convert_positional_triplets(lines, cfg):
 
     patterns = cfg.get("patterns", {})
@@ -391,17 +402,12 @@ def convert_to_csv(txt_path, out_dir, config=None):
 
     mode = cfg.get("mode")
 
-    if mode == "multiline_after_date_with_secondary_category":
-        df = convert_multiline_after_date_with_secondary_category(lines, cfg)
+    if mode not in PARSER_REGISTRY:
+        raise ValueError(f"Modo no soportado: {mode}")
 
-    elif mode == "multiline_after_date_with_detail_line":
-        df = convert_multiline_after_date_with_detail_line(lines, cfg)
+    parser = PARSER_REGISTRY[mode]
 
-    elif mode == "positional_triplets":
-        df = convert_positional_triplets(lines, cfg)
-
-    else:
-        raise ValueError(f"Modo no soportado todavía: {mode}")
+    df = parser(lines, cfg)
 
     out_file = out_dir / f"{Path(txt_path).stem}.csv"
     df.to_csv(out_file, index=False)
