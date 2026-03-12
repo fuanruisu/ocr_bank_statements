@@ -1,0 +1,14 @@
+mode: openbank_block
+
+defaults:
+  cuenta: openbank
+  currency: MXN
+
+patterns:
+
+  amount: "-MXN[0-9,]+\\.[0-9]+"
+
+  date: "\\d{2}\\s+[a-z]{3}\\s+\\d{4}"
+
+ignore_contains:
+  - "DIFERIR COMPRA"
