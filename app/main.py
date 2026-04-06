@@ -65,8 +65,6 @@ def cmd_pipeline(args):
         config_path=args.config,
         bank=args.bank,
         year=args.year,
-        output_base=args.output,
-        db_path=args.db,
         default_currency=args.default_currency,
     )
 
