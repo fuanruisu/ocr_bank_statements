@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 import argparse
 from pathlib import Path
-import duckdb
 
 from app.modules.ocr_extract import extract_text
 from app.modules.ocr_to_csv import convert_to_csv
-from app.modules.normalize_to_duckdb import normalize_csv, ensure_table, upsert_movimientos
+from app.modules.normalize_to_duckdb import normalize_csv, ensure_table, upsert_movimientos, open_db_connection
 from app.modules.pipeline import run_pipeline
 
 
@@ -37,9 +36,6 @@ def cmd_parse(args):
 
 
 def cmd_load(args):
-    db_path = Path(args.db)
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-
     df = normalize_csv(
         input_csv=Path(args.input),
         bank=args.bank,
@@ -47,14 +43,14 @@ def cmd_load(args):
         year=args.year,
     )
 
-    con = duckdb.connect(str(db_path))
+    con = open_db_connection(args.db)
     ensure_table(con)
     upsert_movimientos(con, df)
     total = con.execute("SELECT COUNT(*) FROM movimientos").fetchone()[0]
     con.close()
 
     print("Carga completada")
-    print("DB:", db_path)
+    print("DB:", args.db)
     print("Filas procesadas:", len(df))
     print("Total filas en movimientos:", total)
 

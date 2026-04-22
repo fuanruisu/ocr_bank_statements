@@ -156,6 +156,20 @@ def upsert_movimientos(con, df: pd.DataFrame):
     )
 
 
+def open_db_connection(db: str) -> duckdb.DuckDBPyConnection:
+    """Connect to DuckDB locally or via MotherDuck (md: prefix).
+
+    For MotherDuck, set the motherduck_token env var before calling:
+        export motherduck_token=<your_token>
+    Then pass --db md:finanzas (or any database name on your account).
+    """
+    if db.startswith("md:"):
+        return duckdb.connect(db)
+    path = Path(db)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return duckdb.connect(str(path))
+
+
 def main():
     parser = argparse.ArgumentParser(description="Normaliza CSV staging y lo carga a DuckDB")
     parser.add_argument("--input", required=True, help="CSV staging de entrada")
@@ -167,8 +181,6 @@ def main():
     args = parser.parse_args()
 
     input_csv = Path(args.input)
-    db_path = Path(args.db)
-    db_path.parent.mkdir(parents=True, exist_ok=True)
 
     if not input_csv.exists():
         raise SystemExit(f"No existe input CSV: {input_csv}")
@@ -180,14 +192,14 @@ def main():
         year=args.year,
     )
 
-    con = duckdb.connect(str(db_path))
+    con = open_db_connection(args.db)
     ensure_table(con)
     upsert_movimientos(con, df)
 
     total = con.execute("SELECT COUNT(*) FROM movimientos").fetchone()[0]
 
     print("Normalización completada")
-    print("DB:", db_path)
+    print("DB:", args.db)
     print("Input:", input_csv)
     print("Filas procesadas:", len(df))
     print("Total filas en movimientos:", total)

@@ -2,5 +2,5 @@ pillow
 pytesseract
 pdf2image
 pandas
-duckdb
+duckdb>=1.0.0
 pyyaml
