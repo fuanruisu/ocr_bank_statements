@@ -8,36 +8,40 @@ import pandas as pd
 
 
 MONTHS_ES = {
-    "enero": 1,
-    "febrero": 2,
-    "marzo": 3,
-    "abril": 4,
-    "mayo": 5,
-    "junio": 6,
-    "julio": 7,
-    "agosto": 8,
-    "septiembre": 9,
-    "setiembre": 9,
-    "octubre": 10,
-    "noviembre": 11,
-    "diciembre": 12,
+    "enero": 1, "ene": 1,
+    "febrero": 2, "feb": 2,
+    "marzo": 3, "mar": 3,
+    "abril": 4, "abr": 4,
+    "mayo": 5, "may": 5,
+    "junio": 6, "jun": 6,
+    "julio": 7, "jul": 7,
+    "agosto": 8, "ago": 8,
+    "septiembre": 9, "setiembre": 9, "sep": 9, "set": 9,
+    "octubre": 10, "oct": 10,
+    "noviembre": 11, "nov": 11,
+    "diciembre": 12, "dic": 12,
 }
 
 
 def parse_spanish_date(value: str, year: int) -> str:
     value = value.strip().lower()
-    m = re.match(r"(\d{1,2})\s+de\s+([a-záéíóú]+)", value)
+    # "2 de enero", "lunes 02 de marzo, 2026"
+    m = re.match(r"(?:[a-záéíóú]+\s+)?(\d{1,2})\s+de\s+([a-záéíóú]+)(?:,?\s+(\d{4}))?", value)
+    if not m:
+        # "09 mar 2026" (abbreviated month, no "de")
+        m = re.match(r"(\d{1,2})\s+([a-záéíóú]+)\s+(\d{4})", value)
     if not m:
         raise ValueError(f"Fecha no reconocida: {value}")
 
     day = int(m.group(1))
     month_name = m.group(2)
     month = MONTHS_ES.get(month_name)
+    parsed_year = int(m.group(3)) if m.group(3) else year
 
     if not month:
         raise ValueError(f"Mes no reconocido: {month_name}")
 
-    return f"{year:04d}-{month:02d}-{day:02d}"
+    return f"{parsed_year:04d}-{month:02d}-{day:02d}"
 
 
 def make_hash_id(row: pd.Series) -> str:
@@ -73,6 +77,7 @@ def normalize_csv(input_csv: Path, bank: str, default_currency: str, year: int) 
         raise ValueError(f"Faltan columnas requeridas en staging: {missing}")
 
     out = df.copy()
+    out = out.dropna(subset=["fecha"])
 
     out["fecha"] = out["fecha"].astype(str).map(lambda x: parse_spanish_date(x, year))
     out["categoria"] = out["categoria"].fillna("").astype(str).str.strip().str.lower()
