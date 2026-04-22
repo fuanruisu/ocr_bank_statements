@@ -164,6 +164,11 @@ def open_db_connection(db: str) -> duckdb.DuckDBPyConnection:
     Then pass --db md:finanzas (or any database name on your account).
     """
     if db.startswith("md:"):
+        db_name = db[3:]
+        if db_name:
+            tmp = duckdb.connect("md:")
+            tmp.execute(f'CREATE DATABASE IF NOT EXISTS "{db_name}"')
+            tmp.close()
         return duckdb.connect(db)
     path = Path(db)
     path.parent.mkdir(parents=True, exist_ok=True)
