@@ -7,37 +7,89 @@ import duckdb
 import pandas as pd
 
 
+_CATEGORIA_RULES = [
+    ("Necesidades", ["renta", "luz", "agua", "internet", "gas", "costco", "walmart", "super",
+                     "mercado", "farmacia", "bodega", "soriana", "chedraui", "oxxo", "gasolina"]),
+    ("Gustos",      ["netflix", "spotify", "uber eats", "rappi", "restaurant", "cine", "teatro",
+                     "bar ", "cafe", "starbucks", "amazon", "suscripcion"]),
+    ("Inversion",   ["vanguard", "gbm", "cetes", "inversion", "ahorro", "openbank", "fondo"]),
+    ("Deuda",       ["tdc", "tarjeta", "credito", "msi", "meses", "pago tarjeta"]),
+]
+
+
+def classify_categoria(descripcion: str, detalle: str) -> str:
+    text = f"{descripcion} {detalle}".lower()
+    for categoria, keywords in _CATEGORIA_RULES:
+        if any(k in text for k in keywords):
+            return categoria
+    return ""
+
+
+ALLOWED_ANNOTATE_FIELDS = {
+    "subtipo", "cuenta_destino", "id_referencia", "monto_total",
+    "meses_totales", "meses_restantes", "tiene_intereses", "tasa_interes",
+    "categoria",
+}
+
+
+def update_movimiento(con, hash_id: str, **fields) -> None:
+    invalid = set(fields) - ALLOWED_ANNOTATE_FIELDS
+    if invalid:
+        raise ValueError(f"Campos no permitidos: {invalid}")
+    if not fields:
+        return
+    set_clause = ", ".join(f"{k} = ?" for k in fields)
+    values = list(fields.values()) + [hash_id]
+    con.execute(f"UPDATE movimientos SET {set_clause} WHERE hash_id = ?", values)
+
+
+def print_unclassified_summary(df: pd.DataFrame) -> None:
+    unclassified = df[df["categoria"].isna() | (df["categoria"] == "")]
+    if unclassified.empty:
+        return
+    print(f"\nWARNING: {len(unclassified)} fila(s) sin categoria:")
+    for _, row in unclassified.iterrows():
+        monto_str = f"${row['monto']:,.2f} {row['moneda']}"
+        desc = row["descripcion"] or row["detalle"] or "Sin descripcion"
+        print(f"  - hash_id: {row['hash_id'][:12]}... | {row['fecha']} | {desc} | {monto_str}")
+    print("Ejecuta: banketl annotate --unclassified para etiquetarlos.")
+
+
 MONTHS_ES = {
-    "enero": 1,
-    "febrero": 2,
-    "marzo": 3,
-    "abril": 4,
-    "mayo": 5,
-    "junio": 6,
-    "julio": 7,
-    "agosto": 8,
-    "septiembre": 9,
-    "setiembre": 9,
-    "octubre": 10,
-    "noviembre": 11,
-    "diciembre": 12,
+    "enero": 1, "ene": 1,
+    "febrero": 2, "feb": 2,
+    "marzo": 3, "mar": 3,
+    "abril": 4, "abr": 4,
+    "mayo": 5, "may": 5,
+    "junio": 6, "jun": 6,
+    "julio": 7, "jul": 7,
+    "agosto": 8, "ago": 8,
+    "septiembre": 9, "setiembre": 9, "sep": 9, "set": 9,
+    "octubre": 10, "oct": 10,
+    "noviembre": 11, "nov": 11,
+    "diciembre": 12, "dic": 12,
 }
 
 
 def parse_spanish_date(value: str, year: int) -> str:
     value = value.strip().lower()
-    m = re.match(r"(\d{1,2})\s+de\s+([a-záéíóú]+)", value)
+    # "2 de enero", "lunes 02 de marzo, 2026"
+    m = re.match(r"(?:[a-záéíóú]+\s+)?(\d{1,2})\s+de\s+([a-záéíóú]+)(?:,?\s+(\d{4}))?", value)
+    if not m:
+        # "09 mar 2026" (abbreviated month, no "de")
+        m = re.match(r"(\d{1,2})\s+([a-záéíóú]+)\s+(\d{4})", value)
     if not m:
         raise ValueError(f"Fecha no reconocida: {value}")
 
     day = int(m.group(1))
     month_name = m.group(2)
     month = MONTHS_ES.get(month_name)
+    parsed_year = int(m.group(3)) if m.group(3) else year
 
     if not month:
         raise ValueError(f"Mes no reconocido: {month_name}")
 
-    return f"{year:04d}-{month:02d}-{day:02d}"
+    return f"{parsed_year:04d}-{month:02d}-{day:02d}"
 
 
 def make_hash_id(row: pd.Series) -> str:
@@ -73,9 +125,14 @@ def normalize_csv(input_csv: Path, bank: str, default_currency: str, year: int) 
         raise ValueError(f"Faltan columnas requeridas en staging: {missing}")
 
     out = df.copy()
+    out = out.dropna(subset=["fecha"])
 
     out["fecha"] = out["fecha"].astype(str).map(lambda x: parse_spanish_date(x, year))
-    out["categoria"] = out["categoria"].fillna("").astype(str).str.strip().str.lower()
+    out["categoria"] = out["categoria"].fillna("").astype(str).str.strip()
+    mask_blank = out["categoria"] == ""
+    out.loc[mask_blank, "categoria"] = out.loc[mask_blank].apply(
+        lambda r: classify_categoria(str(r["descripcion"]), str(r["detalle"])), axis=1
+    )
     out["detalle"] = out["detalle"].fillna("").astype(str).str.strip()
     out["descripcion"] = out["descripcion"].fillna("").astype(str).str.strip()
     out["tarjeta_cuenta"] = out["tarjeta_cuenta"].fillna("").astype(str).str.strip()
@@ -94,6 +151,15 @@ def normalize_csv(input_csv: Path, bank: str, default_currency: str, year: int) 
     out["source_file"] = input_csv.name
     out["hash_id"] = out.apply(make_hash_id, axis=1)
 
+    out["subtipo"] = "normal"
+    out["cuenta_destino"] = None
+    out["id_referencia"] = None
+    out["monto_total"] = None
+    out["meses_totales"] = None
+    out["meses_restantes"] = None
+    out["tiene_intereses"] = False
+    out["tasa_interes"] = None
+
     out = out[
         [
             "fecha",
@@ -107,6 +173,14 @@ def normalize_csv(input_csv: Path, bank: str, default_currency: str, year: int) 
             "moneda",
             "source_file",
             "hash_id",
+            "subtipo",
+            "cuenta_destino",
+            "id_referencia",
+            "monto_total",
+            "meses_totales",
+            "meses_restantes",
+            "tiene_intereses",
+            "tasa_interes",
         ]
     ]
 
@@ -127,7 +201,15 @@ def ensure_table(con):
             banco TEXT,
             moneda TEXT,
             source_file TEXT,
-            hash_id TEXT PRIMARY KEY
+            hash_id TEXT PRIMARY KEY,
+            subtipo VARCHAR DEFAULT 'normal',
+            cuenta_destino VARCHAR,
+            id_referencia VARCHAR,
+            monto_total DOUBLE,
+            meses_totales INTEGER,
+            meses_restantes INTEGER,
+            tiene_intereses BOOLEAN DEFAULT false,
+            tasa_interes DOUBLE
         )
         """
     )
@@ -144,7 +226,7 @@ def upsert_movimientos(con, df: pd.DataFrame):
 
     con.execute(
         """
-        INSERT INTO movimientos
+        INSERT INTO movimientos BY NAME
         SELECT *
         FROM df_movs d
         WHERE NOT EXISTS (
@@ -154,6 +236,25 @@ def upsert_movimientos(con, df: pd.DataFrame):
         )
         """
     )
+
+
+def open_db_connection(db: str) -> duckdb.DuckDBPyConnection:
+    """Connect to DuckDB locally or via MotherDuck (md: prefix).
+
+    For MotherDuck, set the motherduck_token env var before calling:
+        export motherduck_token=<your_token>
+    Then pass --db md:finanzas (or any database name on your account).
+    """
+    if db.startswith("md:"):
+        db_name = db[3:]
+        if db_name:
+            tmp = duckdb.connect("md:")
+            tmp.execute(f'CREATE DATABASE IF NOT EXISTS "{db_name}"')
+            tmp.close()
+        return duckdb.connect(db)
+    path = Path(db)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return duckdb.connect(str(path))
 
 
 def main():
@@ -167,8 +268,6 @@ def main():
     args = parser.parse_args()
 
     input_csv = Path(args.input)
-    db_path = Path(args.db)
-    db_path.parent.mkdir(parents=True, exist_ok=True)
 
     if not input_csv.exists():
         raise SystemExit(f"No existe input CSV: {input_csv}")
@@ -180,14 +279,14 @@ def main():
         year=args.year,
     )
 
-    con = duckdb.connect(str(db_path))
+    con = open_db_connection(args.db)
     ensure_table(con)
     upsert_movimientos(con, df)
 
     total = con.execute("SELECT COUNT(*) FROM movimientos").fetchone()[0]
 
     print("Normalización completada")
-    print("DB:", db_path)
+    print("DB:", args.db)
     print("Input:", input_csv)
     print("Filas procesadas:", len(df))
     print("Total filas en movimientos:", total)
