@@ -7,6 +7,54 @@ import duckdb
 import pandas as pd
 
 
+_CATEGORIA_RULES = [
+    ("Necesidades", ["renta", "luz", "agua", "internet", "gas", "costco", "walmart", "super",
+                     "mercado", "farmacia", "bodega", "soriana", "chedraui", "oxxo", "gasolina"]),
+    ("Gustos",      ["netflix", "spotify", "uber eats", "rappi", "restaurant", "cine", "teatro",
+                     "bar ", "cafe", "starbucks", "amazon", "suscripcion"]),
+    ("Inversion",   ["vanguard", "gbm", "cetes", "inversion", "ahorro", "openbank", "fondo"]),
+    ("Deuda",       ["tdc", "tarjeta", "credito", "msi", "meses", "pago tarjeta"]),
+]
+
+
+def classify_categoria(descripcion: str, detalle: str) -> str:
+    text = f"{descripcion} {detalle}".lower()
+    for categoria, keywords in _CATEGORIA_RULES:
+        if any(k in text for k in keywords):
+            return categoria
+    return ""
+
+
+ALLOWED_ANNOTATE_FIELDS = {
+    "subtipo", "cuenta_destino", "id_referencia", "monto_total",
+    "meses_totales", "meses_restantes", "tiene_intereses", "tasa_interes",
+    "categoria",
+}
+
+
+def update_movimiento(con, hash_id: str, **fields) -> None:
+    invalid = set(fields) - ALLOWED_ANNOTATE_FIELDS
+    if invalid:
+        raise ValueError(f"Campos no permitidos: {invalid}")
+    if not fields:
+        return
+    set_clause = ", ".join(f"{k} = ?" for k in fields)
+    values = list(fields.values()) + [hash_id]
+    con.execute(f"UPDATE movimientos SET {set_clause} WHERE hash_id = ?", values)
+
+
+def print_unclassified_summary(df: pd.DataFrame) -> None:
+    unclassified = df[df["categoria"].isna() | (df["categoria"] == "")]
+    if unclassified.empty:
+        return
+    print(f"\nWARNING: {len(unclassified)} fila(s) sin categoria:")
+    for _, row in unclassified.iterrows():
+        monto_str = f"${row['monto']:,.2f} {row['moneda']}"
+        desc = row["descripcion"] or row["detalle"] or "Sin descripcion"
+        print(f"  - hash_id: {row['hash_id'][:12]}... | {row['fecha']} | {desc} | {monto_str}")
+    print("Ejecuta: banketl annotate --unclassified para etiquetarlos.")
+
+
 MONTHS_ES = {
     "enero": 1, "ene": 1,
     "febrero": 2, "feb": 2,
@@ -80,7 +128,11 @@ def normalize_csv(input_csv: Path, bank: str, default_currency: str, year: int) 
     out = out.dropna(subset=["fecha"])
 
     out["fecha"] = out["fecha"].astype(str).map(lambda x: parse_spanish_date(x, year))
-    out["categoria"] = out["categoria"].fillna("").astype(str).str.strip().str.lower()
+    out["categoria"] = out["categoria"].fillna("").astype(str).str.strip()
+    mask_blank = out["categoria"] == ""
+    out.loc[mask_blank, "categoria"] = out.loc[mask_blank].apply(
+        lambda r: classify_categoria(str(r["descripcion"]), str(r["detalle"])), axis=1
+    )
     out["detalle"] = out["detalle"].fillna("").astype(str).str.strip()
     out["descripcion"] = out["descripcion"].fillna("").astype(str).str.strip()
     out["tarjeta_cuenta"] = out["tarjeta_cuenta"].fillna("").astype(str).str.strip()
@@ -99,6 +151,15 @@ def normalize_csv(input_csv: Path, bank: str, default_currency: str, year: int) 
     out["source_file"] = input_csv.name
     out["hash_id"] = out.apply(make_hash_id, axis=1)
 
+    out["subtipo"] = "normal"
+    out["cuenta_destino"] = None
+    out["id_referencia"] = None
+    out["monto_total"] = None
+    out["meses_totales"] = None
+    out["meses_restantes"] = None
+    out["tiene_intereses"] = False
+    out["tasa_interes"] = None
+
     out = out[
         [
             "fecha",
@@ -112,6 +173,14 @@ def normalize_csv(input_csv: Path, bank: str, default_currency: str, year: int) 
             "moneda",
             "source_file",
             "hash_id",
+            "subtipo",
+            "cuenta_destino",
+            "id_referencia",
+            "monto_total",
+            "meses_totales",
+            "meses_restantes",
+            "tiene_intereses",
+            "tasa_interes",
         ]
     ]
 
@@ -132,7 +201,15 @@ def ensure_table(con):
             banco TEXT,
             moneda TEXT,
             source_file TEXT,
-            hash_id TEXT PRIMARY KEY
+            hash_id TEXT PRIMARY KEY,
+            subtipo VARCHAR DEFAULT 'normal',
+            cuenta_destino VARCHAR,
+            id_referencia VARCHAR,
+            monto_total DOUBLE,
+            meses_totales INTEGER,
+            meses_restantes INTEGER,
+            tiene_intereses BOOLEAN DEFAULT false,
+            tasa_interes DOUBLE
         )
         """
     )
@@ -149,7 +226,7 @@ def upsert_movimientos(con, df: pd.DataFrame):
 
     con.execute(
         """
-        INSERT INTO movimientos
+        INSERT INTO movimientos BY NAME
         SELECT *
         FROM df_movs d
         WHERE NOT EXISTS (
